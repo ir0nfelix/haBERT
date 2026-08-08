@@ -1,13 +1,12 @@
 """Asynchronous background Habr API scraper with rate limiting and circuit breaker."""
 
 import asyncio
-from datetime import datetime, timezone
 import json
 import logging
 import os
-from pathlib import Path
 import random
-from typing import Any
+from datetime import datetime, timezone
+from pathlib import Path
 
 import aiofiles
 import httpx
