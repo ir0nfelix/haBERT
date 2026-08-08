@@ -158,6 +158,76 @@ async def test_fetch_habr_publication_429_rate_limit() -> None:
 
         record = await queue.get()
         assert record["pub_id"] == 560003
-        assert record["http_status"] == 429
-        assert record["error_code"] == "HTTP_429"
+        assert record["http_status"] == 0
+        assert record["error_code"] == "NETWORK_OR_RATE_LIMIT"
         assert state.fatal_errors_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_habr_publication_403_business_logic() -> None:
+    """Test 403 IN_DRAFTS and AUTHOR_INACTIVE business logic skips without fatal error."""
+    payload = {"httpCode": 403, "errorCode": "IN_DRAFTS", "message": "Post is in drafts"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        semaphore = asyncio.Semaphore(15)
+        state = ScraperState()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        await fetch_habr_publication(client, 560004, semaphore, state, queue)
+
+        record = await queue.get()
+        assert record["pub_id"] == 560004
+        assert record["http_status"] == 403
+        assert record["error_code"] == "IN_DRAFTS"
+        assert state.fatal_errors_count == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_habr_publication_403_waf_ban() -> None:
+    """Test 403 WAF/security ban triggering fatal error counter."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, html="<html><title>403 Forbidden Cloudflare</title></html>")
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        semaphore = asyncio.Semaphore(15)
+        state = ScraperState()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        await fetch_habr_publication(client, 560005, semaphore, state, queue)
+
+        record = await queue.get()
+        assert record["pub_id"] == 560005
+        assert record["http_status"] == 403
+        assert record["error_code"] == "HTTP_403_WAF"
+        assert state.fatal_errors_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_habr_publication_404_unknown_error() -> None:
+    """Test unknown 404 error response without incrementing consecutive_not_found counter."""
+    payload = {"error": {"code": "SOME_NEW_FUTURE_ERROR"}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        semaphore = asyncio.Semaphore(15)
+        state = ScraperState()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        await fetch_habr_publication(client, 560006, semaphore, state, queue)
+
+        record = await queue.get()
+        assert record["pub_id"] == 560006
+        assert record["http_status"] == 404
+        assert record["error_code"] == "HTTP_404_SOME_NEW_FUTURE_ERROR"
+        assert state.consecutive_not_found == 0
+
+

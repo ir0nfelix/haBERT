@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import json
 import logging
 import os
+from pathlib import Path
+import random
 from typing import Any
 
 import aiofiles
@@ -14,6 +16,14 @@ import stamina
 from feed.schemas.habr_models import HabrPublicationDTO
 
 logger = logging.getLogger(__name__)
+
+# Create absolute path relative to this script's directory
+DEFAULT_OUTPUT = str(Path(__file__).resolve().parent.parent / "data" / "habr_analytics.jsonl")
+
+
+class RateLimitException(Exception):
+    """Exception raised to trigger stamina backoff on HTTP 429 and 503."""
+    pass
 
 
 class ScraperState:
@@ -69,9 +79,6 @@ async def file_writer(queue: asyncio.Queue, file_path: str) -> None:
             queue.task_done()
 
 
-import random
-
-
 def get_random_headers() -> dict[str, str]:
     """Генерирует случайный, максимально реалистичный профиль браузера для обхода WAF."""
 
@@ -102,7 +109,7 @@ def get_random_headers() -> dict[str, str]:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
             "Sec-Ch-Ua-Mobile": "?0",
             "Sec-Ch-Ua-Platform": '"Windows"',
-        }
+        },
     ]
 
     profile = random.choice(browser_profiles)
@@ -147,19 +154,32 @@ async def fetch_habr_publication(
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         try:
-            for attempt in stamina.retry_context(
-                on=(httpx.NetworkError, httpx.TimeoutException),
-                attempts=3,
+            # Use async for to prevent blocking the event loop
+            async for attempt in stamina.retry_context(
+                on=(httpx.NetworkError, httpx.TimeoutException, RateLimitException),
+                attempts=5,
+                wait_initial=2.0,
+                wait_max=15.0,
             ):
                 with attempt:
-                    response = await client.get(headers=get_random_headers(), url=url)
-        except (httpx.NetworkError, httpx.TimeoutException) as exc:
-            state.register_fatal_error(f"Network failure for pub_id={pub_id}: {exc}")
+                    response = await client.get(url=url, headers=get_random_headers())
+
+                    # Trigger backoff on rate limits or server overloads
+                    if response.status_code in (429, 503):
+                        logger.warning(
+                            "Rate limited (HTTP %d) on pub_id=%d. Backing off...",
+                            response.status_code,
+                            pub_id,
+                        )
+                        raise RateLimitException(f"HTTP {response.status_code}")
+
+        except (httpx.NetworkError, httpx.TimeoutException, RateLimitException) as exc:
+            state.register_fatal_error(f"Failed after retries for pub_id={pub_id}: {exc}")
             record = {
                 "timestamp": timestamp,
                 "pub_id": pub_id,
                 "http_status": 0,
-                "error_code": "NETWORK_ERROR",
+                "error_code": "NETWORK_OR_RATE_LIMIT",
                 "post_type": None,
                 "is_seo": False,
                 "article_score": 0,
@@ -231,7 +251,7 @@ async def fetch_habr_publication(
                 pass
 
             if error_code == "POST_TYPE_MISMATCH":
-                # Micro-post (postType="post")
+                # Micro-post (postType="post") - Safe skip
                 record = {
                     "timestamp": timestamp,
                     "pub_id": pub_id,
@@ -244,8 +264,10 @@ async def fetch_habr_publication(
                     "hubs": [],
                     "tags": [],
                 }
-            else:
-                # Deleted publication or horizon reached
+                await queue.put(record)
+
+            elif error_code == "NOT_FOUND":
+                # Explicitly deleted publication or actual horizon reached
                 state.register_not_found()
                 record = {
                     "timestamp": timestamp,
@@ -259,7 +281,67 @@ async def fetch_habr_publication(
                     "hubs": [],
                     "tags": [],
                 }
-            await queue.put(record)
+                await queue.put(record)
+
+            else:
+                # Unknown 404 error. Do NOT increment consecutive_not_found to prevent false stops.
+                record = {
+                    "timestamp": timestamp,
+                    "pub_id": pub_id,
+                    "http_status": 404,
+                    "error_code": f"HTTP_404_{error_code or 'UNKNOWN'}",
+                    "post_type": None,
+                    "is_seo": False,
+                    "article_score": 0,
+                    "author_score": 0,
+                    "hubs": [],
+                    "tags": [],
+                }
+                await queue.put(record)
+
+        elif response.status_code == 403:
+            error_code = None
+            try:
+                data = response.json()
+                error_code = (
+                    data.get("meta", {}).get("errorCode")
+                    or data.get("errorCode")
+                    or data.get("error", {}).get("code")
+                )
+            except Exception:
+                pass
+
+            if error_code in ("IN_DRAFTS", "AUTHOR_INACTIVE"):
+                # Safe business-logic skips. Do NOT trigger circuit breaker.
+                record = {
+                    "timestamp": timestamp,
+                    "pub_id": pub_id,
+                    "http_status": 403,
+                    "error_code": error_code,
+                    "post_type": None,
+                    "is_seo": False,
+                    "article_score": 0,
+                    "author_score": 0,
+                    "hubs": [],
+                    "tags": [],
+                }
+                await queue.put(record)
+            else:
+                # Actual WAF or unauthorized ban
+                state.register_fatal_error(f"HTTP 403 (Security Ban) for pub_id={pub_id}")
+                record = {
+                    "timestamp": timestamp,
+                    "pub_id": pub_id,
+                    "http_status": 403,
+                    "error_code": f"HTTP_403_{error_code or 'WAF'}",
+                    "post_type": None,
+                    "is_seo": False,
+                    "article_score": 0,
+                    "author_score": 0,
+                    "hubs": [],
+                    "tags": [],
+                }
+                await queue.put(record)
 
         else:
             # 429 Rate Limit, 403 Forbidden, 5xx Server Error, etc.
@@ -281,11 +363,10 @@ async def fetch_habr_publication(
 
 async def run_scraper(
     start_id: int = 560000,
-    # end_id: int = 1070000,
     end_id: int = 560500,
-    batch_size: int = 500,
-    concurrency: int = 10,
-    output_file: str = "../data/habr_analytics.jsonl",
+    batch_size: int = 100,
+    concurrency: int = 12,
+    output_file: str = DEFAULT_OUTPUT,
     trust_env: bool = False,
 ) -> ScraperState:
     """Orchestrate background scraper tasks and JSONL writer."""
@@ -299,7 +380,6 @@ async def run_scraper(
     async with httpx.AsyncClient(
         timeout=10.0,
         limits=limits,
-        headers={"User-Agent": "Mozilla/5.0"},
         trust_env=trust_env,
     ) as client:
         for batch_start in range(start_id, end_id, batch_size):
