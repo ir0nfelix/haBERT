@@ -69,6 +69,64 @@ async def file_writer(queue: asyncio.Queue, file_path: str) -> None:
             queue.task_done()
 
 
+import random
+
+
+def get_random_headers() -> dict[str, str]:
+    """Генерирует случайный, максимально реалистичный профиль браузера для обхода WAF."""
+
+    browser_profiles = [
+        # 1. Десктопный Chrome на Windows
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+        },
+        # 2. Десктопный Chrome на macOS
+        {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"macOS"',
+        },
+        # 3. Мобильный Chrome на Android (отлично разбавляет трафик)
+        {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "Sec-Ch-Ua-Mobile": "?1",
+            "Sec-Ch-Ua-Platform": '"Android"',
+        },
+        # 4. Десктопный Firefox на Windows
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+        }
+    ]
+
+    profile = random.choice(browser_profiles)
+
+    # Базовые заголовки, общие для всех современных браузеров при обращении к API
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Priority": "u=1, i",
+        "Cache-Control": "max-age=0",
+        "Referer": "https://habr.com/",
+        "Origin": "https://habr.com/",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "Connection": "keep-alive",
+    }
+
+    # Накладываем выбранный профиль поверх базовых заголовков
+    headers.update(profile)
+    return headers
+
+
 async def fetch_habr_publication(
     client: httpx.AsyncClient,
     pub_id: int,
@@ -94,7 +152,7 @@ async def fetch_habr_publication(
                 attempts=3,
             ):
                 with attempt:
-                    response = await client.get(url)
+                    response = await client.get(headers=get_random_headers(), url=url)
         except (httpx.NetworkError, httpx.TimeoutException) as exc:
             state.register_fatal_error(f"Network failure for pub_id={pub_id}: {exc}")
             record = {
@@ -223,10 +281,11 @@ async def fetch_habr_publication(
 
 async def run_scraper(
     start_id: int = 560000,
-    end_id: int = 1070000,
+    # end_id: int = 1070000,
+    end_id: int = 560500,
     batch_size: int = 500,
-    concurrency: int = 15,
-    output_file: str = "feed/data/habr_analytics.jsonl",
+    concurrency: int = 10,
+    output_file: str = "../data/habr_analytics.jsonl",
     trust_env: bool = False,
 ) -> ScraperState:
     """Orchestrate background scraper tasks and JSONL writer."""
