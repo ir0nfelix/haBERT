@@ -69,15 +69,29 @@
 Фоновый скрапер ([feed/services/scraper.py](feed/services/scraper.py)) реализован на базе асинхронного конечного автомата (State Machine) и состоит из 5 фаз. Для параллельной разведки масштабных исторических каверн в нумерации статей (гэпов - gap) интегрирован Ray:
 
 ```mermaid
-stateDiagram-v2
+stateDiagram
     [*] --> Phase1_NormalFlow
-    Phase1_NormalFlow --> Phase2_GapDetection: 100 consecutive 404s
-    Phase2_GapDetection --> Phase3_RayDelegation: Right edge found (HEAD 200/403)
-    Phase2_GapDetection --> EmergencyStop: Edge not found (Max probe distance)
-    Phase3_RayDelegation --> Phase1_NormalFlow: Instant current_id jump & reset counter
-    Phase3_RayDelegation --> Phase4_RayWorkerLogic: Spawn @ray.remote task (Background)
-    Phase4_RayWorkerLogic --> Phase5_WatcherBridge: Return alive_ids
-    Phase5_WatcherBridge --> Write_to_JSONL: Spawn full GET tasks for alive_ids
+    
+    Phase1_NormalFlow --> Phase2_GapDetection: 100 consecutive 404 NOT_FOUND
+    
+    state Phase2_GapDetection {
+        [*] --> JumpForward: Next jump (+300, +500, +700...)
+        JumpForward --> MaxDistanceReached: Jump > 50000
+        JumpForward --> LocalWindowCheck: Scan next 30 IDs (HEAD)
+        
+        LocalWindowCheck --> JumpForward: All 30 IDs returned 404
+        LocalWindowCheck --> RightEdgeFound: Hit 200 or 403 (Break loop)
+    }
+    
+    RightEdgeFound --> Phase3_RayDelegation: Return gap_stop ID
+    MaxDistanceReached --> EmergencyStop: Horizon reached (Halt)
+    
+    Phase3_RayDelegation --> Phase1_NormalFlow: Instant jump (current_id = gap_stop) & reset counter
+    Phase3_RayDelegation --> Phase4_RayWorkerLogic: Spawn gap_watcher (Background)
+    
+    Phase4_RayWorkerLogic --> Phase5_WatcherBridge: Return alive_ids (From HEAD sweeps)
+    Phase5_WatcherBridge --> HarvestTasks: Spawn fetch_habr_publication (GET)
+    HarvestTasks --> [*]: Save to habr_analytics.jsonl
 ```
 
 ### Фазы работы:
