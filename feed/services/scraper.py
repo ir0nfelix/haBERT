@@ -364,7 +364,7 @@ async def run_scraper(
     start_id: int = 560000,
     end_id: int = 560500,
     batch_size: int = 100,
-    concurrency: int = 12,
+    concurrency: int = 15,
     output_file: str = DEFAULT_OUTPUT,
     trust_env: bool = False,
 ) -> ScraperState:
@@ -402,4 +402,18 @@ async def run_scraper(
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(run_scraper())
+    start_id = int(os.getenv("START_ID", "560000"))
+    end_id = int(os.getenv("END_ID", "1060000"))
+    batch_size = int(os.getenv("BATCH_SIZE", "500"))
+    concurrency = int(os.getenv("CONCURRENCY", "15"))
+    output_file = os.getenv("OUTPUT_FILE", DEFAULT_OUTPUT)
+
+    asyncio.run(
+        run_scraper(
+            start_id=start_id,
+            end_id=end_id,
+            batch_size=batch_size,
+            concurrency=concurrency,
+            output_file=output_file,
+        )
+    )
