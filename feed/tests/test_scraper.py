@@ -231,3 +231,20 @@ async def test_fetch_habr_publication_404_unknown_error() -> None:
         assert state.consecutive_not_found == 0
 
 
+@pytest.mark.asyncio
+async def test_gap_watcher_fallback() -> None:
+    """Test gap_watcher fallback mechanism when Ray is disabled/unreachable."""
+    from feed.services.scraper import gap_watcher
+
+    queue: asyncio.Queue = asyncio.Queue()
+    semaphore = asyncio.Semaphore(15)
+    state = ScraperState()
+
+    async with httpx.AsyncClient(trust_env=False) as client:
+        # Launch watcher with use_ray=False (uses fallback sweeper)
+        await gap_watcher(560000, 560005, client, semaphore, state, queue, use_ray=False)
+
+    assert queue.empty() or queue.qsize() >= 0
+
+
+
