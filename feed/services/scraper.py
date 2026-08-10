@@ -168,7 +168,7 @@ if RAY_AVAILABLE:
                 for pub_id in range(gap_start, gap_stop):
                     url = f"https://habr.com/kek/v2/articles/{pub_id}/"
                     try:
-                        resp = await client.get(url=url, headers=get_random_headers())
+                        resp = await client.head(url=url, headers=get_random_headers())
                         if resp.status_code in (200, 403):
                             alive.append(pub_id)
                     except Exception:
@@ -191,7 +191,7 @@ async def fallback_gap_sweeper(gap_start: int, gap_stop: int) -> list[int]:
         for pub_id in range(gap_start, gap_stop):
             url = f"https://habr.com/kek/v2/articles/{pub_id}/"
             try:
-                resp = await client.get(url=url, headers=get_random_headers())
+                resp = await client.head(url=url, headers=get_random_headers())
                 if resp.status_code in (200, 403):
                     alive.append(pub_id)
             except Exception:
@@ -261,7 +261,7 @@ async def probe_gap_right_edge(
         for test_id in range(probe_target, probe_target + 30):
             url = f"https://habr.com/kek/v2/articles/{test_id}/"
             try:
-                resp = await client.get(url=url, headers=get_random_headers())
+                resp = await client.head(url=url, headers=get_random_headers())
                 if resp.status_code in (200, 403):
                     local_hit = test_id
                     break
@@ -546,7 +546,17 @@ async def run_scraper(
                     )
                     state.known_gaps.append((gap_start, gap_stop))
                     # Phase 3: Non-blocking Ray Watcher delegation
-                    asyncio.create_task(gap_watcher(gap_start, gap_stop, result_queue, use_ray=use_ray))
+                    asyncio.create_task(
+                        gap_watcher(
+                            gap_start,
+                            gap_stop,
+                            client,
+                            semaphore,
+                            state,
+                            result_queue,
+                            use_ray=use_ray,
+                        )
+                    )
                     current_id = gap_stop
                     state.reset_not_found()
                     state.is_probing = False
