@@ -6,6 +6,7 @@ from pathlib import Path
 import random
 from typing import Any
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import aiofiles
 import httpx
@@ -17,6 +18,22 @@ logger = logging.getLogger(__name__)
 
 # Global proxy configuration from environment
 HABR_PROXY = os.getenv("HABR_PROXY")
+
+
+def sanitize_proxy_url(proxy: str | None) -> str:
+    """Returns a safe, sanitized string representation of a proxy URL (masking credentials)."""
+    if not proxy or not proxy.strip():
+        return "Disabled (Direct Connection)"
+    try:
+        parsed = urlparse(proxy.strip())
+        if parsed.hostname:
+            port_str = f":{parsed.port}" if parsed.port else ""
+            user_str = f"{parsed.username}@" if parsed.username else ""
+            return f"{parsed.scheme or 'http'}://{user_str}{parsed.hostname}{port_str}"
+    except Exception:
+        pass
+    return "Enabled"
+
 
 # Create absolute path relative to this script's directory
 DEFAULT_OUTPUT = str(Path(__file__).resolve().parent.parent / "data" / "habr_analytics.jsonl")
@@ -80,15 +97,14 @@ class ScraperState:
             self.stop_event.set()
 
     def register_not_found(self) -> None:
-        """Increment consecutive 404 NOT_FOUND counter and trigger stop_event if threshold reached."""
+        """Increment consecutive 404 NOT_FOUND counter."""
         self.consecutive_not_found += 1
         if self.consecutive_not_found >= self.max_consecutive_not_found:
-            logger.error(
+            logger.warning(
                 "Consecutive NOT_FOUND threshold reached (%d/%d)!",
                 self.consecutive_not_found,
                 self.max_consecutive_not_found,
             )
-            self.stop_event.set()
 
     def reset_not_found(self) -> None:
         """Reset consecutive 404 NOT_FOUND counter upon successful publication hit or gap jump."""
@@ -192,6 +208,12 @@ async def fallback_gap_sweeper(gap_start: int, gap_stop: int) -> list[int]:
     alive: list[int] = []
     limits = httpx.Limits(max_keepalive_connections=10, max_connections=25)
     proxy = HABR_PROXY or None
+    logger.info(
+        "Running local gap sweep for range (%d, %d) [proxy=%s].",
+        gap_start,
+        gap_stop,
+        sanitize_proxy_url(proxy),
+    )
     async with httpx.AsyncClient(timeout=8.0, limits=limits, trust_env=False, proxy=proxy) as client:
         for pub_id in range(gap_start, gap_stop):
             url = f"https://habr.com/kek/v2/articles/{pub_id}/"
@@ -288,13 +310,13 @@ async def fetch_habr_publication(
     queue: asyncio.Queue,
 ) -> None:
     """Fetch publication metadata for a single pub_id with rate limiting and retry handling (Phase 1)."""
-    if state.stop_event.is_set():
+    if state.stop_event.is_set() or state.consecutive_not_found >= state.max_consecutive_not_found:
         return
 
     url = f"https://habr.com/kek/v2/articles/{pub_id}/"
 
     async with semaphore:
-        if state.stop_event.is_set():
+        if state.stop_event.is_set() or state.consecutive_not_found >= state.max_consecutive_not_found:
             return
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -311,9 +333,10 @@ async def fetch_habr_publication(
 
                     if response.status_code in (429, 503):
                         logger.warning(
-                            "Rate limited (HTTP %d) on pub_id=%d. Backing off...",
+                            "Rate limited (HTTP %d) on pub_id=%d [proxy=%s]. Backing off...",
                             response.status_code,
                             pub_id,
+                            sanitize_proxy_url(HABR_PROXY),
                         )
                         raise RateLimitException(f"HTTP {response.status_code}")
 
@@ -472,6 +495,11 @@ async def fetch_habr_publication(
                 await queue.put(record)
             else:
                 # Security Ban
+                logger.warning(
+                    "HTTP 403 (Security Ban) for pub_id=%d [proxy=%s]",
+                    pub_id,
+                    sanitize_proxy_url(HABR_PROXY),
+                )
                 state.register_fatal_error(f"HTTP 403 (Security Ban) for pub_id={pub_id}")
                 record = {
                     "timestamp": timestamp,
@@ -522,6 +550,14 @@ async def run_scraper(
     writer_task = asyncio.create_task(file_writer(result_queue, output_file))
 
     active_proxy = HABR_PROXY or None
+    logger.info(
+        "Starting scraper execution: range=(%d, %d), batch_size=%d, concurrency=%d, proxy=%s",
+        start_id,
+        end_id,
+        batch_size,
+        concurrency,
+        sanitize_proxy_url(active_proxy),
+    )
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=30)
     async with httpx.AsyncClient(
         timeout=10.0,
@@ -615,7 +651,7 @@ if __name__ == "__main__":
     end_id = int(os.environ["END_ID"])
     batch_size = int(os.environ["BATCH_SIZE"])
     concurrency = int(os.environ["CONCURRENCY"])
-    output_file = os.environ.get("OUTPUT_FILE", DEFAULT_OUTPUT)
+    output_file = DEFAULT_OUTPUT
 
     asyncio.run(
         run_scraper(

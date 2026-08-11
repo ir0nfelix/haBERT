@@ -33,7 +33,8 @@ async def test_scraper_state_thresholds() -> None:
         assert not state_nf.stop_event.is_set()
 
     state_nf.register_not_found()
-    assert state_nf.stop_event.is_set()
+    assert not state_nf.stop_event.is_set()
+    assert state_nf.consecutive_not_found == 3
 
     state_nf.reset_not_found()
     assert state_nf.consecutive_not_found == 0
