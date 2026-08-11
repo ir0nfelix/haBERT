@@ -2,11 +2,8 @@ services:
   scraper:
     build: .
     container_name: habr_scraper
-    environment:
-      - START_ID=560000
-      - END_ID=1060000
-      - BATCH_SIZE=500
-      - CONCURRENCY=15
+    env_file:
+      - .env
     volumes:
       - ../output:/app/feed/data
     restart: "no"

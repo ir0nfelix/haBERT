@@ -15,6 +15,9 @@ from feed.schemas.habr_models import HabrPublicationDTO
 
 logger = logging.getLogger(__name__)
 
+# Global proxy configuration from environment
+HABR_PROXY = os.getenv("HABR_PROXY")
+
 # Create absolute path relative to this script's directory
 DEFAULT_OUTPUT = str(Path(__file__).resolve().parent.parent / "data" / "habr_analytics.jsonl")
 
@@ -164,7 +167,8 @@ if RAY_AVAILABLE:
         async def _sweep() -> list[int]:
             alive: list[int] = []
             limits = httpx.Limits(max_keepalive_connections=10, max_connections=25)
-            async with httpx.AsyncClient(timeout=8.0, limits=limits, trust_env=False) as client:
+            proxy = os.getenv("HABR_PROXY") or HABR_PROXY or None
+            async with httpx.AsyncClient(timeout=8.0, limits=limits, trust_env=False, proxy=proxy) as client:
                 for pub_id in range(gap_start, gap_stop):
                     url = f"https://habr.com/kek/v2/articles/{pub_id}/"
                     try:
@@ -187,7 +191,8 @@ async def fallback_gap_sweeper(gap_start: int, gap_stop: int) -> list[int]:
     """In-process async fallback sweeper when Ray is not connected."""
     alive: list[int] = []
     limits = httpx.Limits(max_keepalive_connections=10, max_connections=25)
-    async with httpx.AsyncClient(timeout=8.0, limits=limits, trust_env=False) as client:
+    proxy = HABR_PROXY or None
+    async with httpx.AsyncClient(timeout=8.0, limits=limits, trust_env=False, proxy=proxy) as client:
         for pub_id in range(gap_start, gap_stop):
             url = f"https://habr.com/kek/v2/articles/{pub_id}/"
             try:
@@ -516,11 +521,13 @@ async def run_scraper(
 
     writer_task = asyncio.create_task(file_writer(result_queue, output_file))
 
+    active_proxy = HABR_PROXY or None
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=30)
     async with httpx.AsyncClient(
         timeout=10.0,
         limits=limits,
         trust_env=trust_env,
+        proxy=active_proxy,
     ) as client:
         current_id = start_id
 
@@ -588,11 +595,16 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     init_ray()
 
-    start_id = int(os.getenv("START_ID", "560000"))
-    end_id = int(os.getenv("END_ID", "1060000"))
-    batch_size = int(os.getenv("BATCH_SIZE", "500"))
-    concurrency = int(os.getenv("CONCURRENCY", "15"))
-    output_file = os.getenv("OUTPUT_FILE", DEFAULT_OUTPUT)
+    required_vars = ["START_ID", "END_ID", "BATCH_SIZE", "CONCURRENCY"]
+    missing_vars = [var for var in required_vars if var not in os.environ]
+    if missing_vars:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+
+    start_id = int(os.environ["START_ID"])
+    end_id = int(os.environ["END_ID"])
+    batch_size = int(os.environ["BATCH_SIZE"])
+    concurrency = int(os.environ["CONCURRENCY"])
+    output_file = os.environ.get("OUTPUT_FILE", DEFAULT_OUTPUT)
 
     asyncio.run(
         run_scraper(
