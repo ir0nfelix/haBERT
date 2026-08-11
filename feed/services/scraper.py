@@ -592,7 +592,18 @@ async def run_scraper(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    log_file = Path(__file__).resolve().parent.parent / "data" / "scraper.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(log_file, encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
+    )
+
     init_ray()
 
     required_vars = ["START_ID", "END_ID", "BATCH_SIZE", "CONCURRENCY"]
