@@ -6,37 +6,19 @@ from pathlib import Path
 import random
 from typing import Any
 from datetime import datetime, timezone
-from urllib.parse import urlparse
 
 import aiofiles
 import httpx
 import stamina
 
+from feed.helpers import get_data_path, sanitize_proxy_url
 from feed.schemas.habr_models import HabrPublicationDTO
+from feed.settings import RAW_SCRAPES_FILE, SCRAPER_LOG_FILE, settings
 
 logger = logging.getLogger(__name__)
 
-# Global proxy configuration from environment
-HABR_PROXY = os.getenv("HABR_PROXY")
 
-
-def sanitize_proxy_url(proxy: str | None) -> str:
-    """Returns a safe, sanitized string representation of a proxy URL (masking credentials)."""
-    if not proxy or not proxy.strip():
-        return "Disabled (Direct Connection)"
-    try:
-        parsed = urlparse(proxy.strip())
-        if parsed.hostname:
-            port_str = f":{parsed.port}" if parsed.port else ""
-            user_str = f"{parsed.username}@" if parsed.username else ""
-            return f"{parsed.scheme or 'http'}://{user_str}{parsed.hostname}{port_str}"
-    except Exception:
-        pass
-    return "Enabled"
-
-
-# Create absolute path relative to this script's directory
-DEFAULT_OUTPUT = str(Path(__file__).resolve().parent.parent / "data" / "habr_analytics.jsonl")
+DEFAULT_OUTPUT = get_data_path(RAW_SCRAPES_FILE)
 
 # Ray integration setup
 try:
@@ -183,10 +165,10 @@ if RAY_AVAILABLE:
         async def _sweep() -> list[int]:
             alive: list[int] = []
             limits = httpx.Limits(max_keepalive_connections=10, max_connections=25)
-            proxy = os.getenv("HABR_PROXY") or HABR_PROXY or None
+            proxy = settings.PROXY_SERVER_STR
             async with httpx.AsyncClient(timeout=8.0, limits=limits, trust_env=False, proxy=proxy) as client:
                 for pub_id in range(gap_start, gap_stop):
-                    url = f"https://habr.com/kek/v2/articles/{pub_id}/"
+                    url = f"{settings.HABR_BASE_API_URL.rstrip('/')}/{pub_id}/"
                     try:
                         resp = await client.head(url=url, headers=get_random_headers())
                         if resp.status_code in (200, 403):
@@ -207,7 +189,7 @@ async def fallback_gap_sweeper(gap_start: int, gap_stop: int) -> list[int]:
     """In-process async fallback sweeper when Ray is not connected."""
     alive: list[int] = []
     limits = httpx.Limits(max_keepalive_connections=10, max_connections=25)
-    proxy = HABR_PROXY or None
+    proxy = settings.PROXY_SERVER_STR
     logger.info(
         "Running local gap sweep for range (%d, %d) [proxy=%s].",
         gap_start,
@@ -216,7 +198,7 @@ async def fallback_gap_sweeper(gap_start: int, gap_stop: int) -> list[int]:
     )
     async with httpx.AsyncClient(timeout=8.0, limits=limits, trust_env=False, proxy=proxy) as client:
         for pub_id in range(gap_start, gap_stop):
-            url = f"https://habr.com/kek/v2/articles/{pub_id}/"
+            url = f"{settings.HABR_BASE_API_URL.rstrip('/')}/{pub_id}/"
             try:
                 resp = await client.head(url=url, headers=get_random_headers())
                 if resp.status_code in (200, 403):
@@ -286,7 +268,7 @@ async def probe_gap_right_edge(
         # Check local window of up to 30 IDs around probe_target
         local_hit = None
         for test_id in range(probe_target, probe_target + 30):
-            url = f"https://habr.com/kek/v2/articles/{test_id}/"
+            url = f"{settings.HABR_BASE_API_URL.rstrip('/')}/{test_id}/"
             try:
                 resp = await client.head(url=url, headers=get_random_headers())
                 if resp.status_code in (200, 403):
@@ -313,7 +295,7 @@ async def fetch_habr_publication(
     if state.stop_event.is_set() or state.consecutive_not_found >= state.max_consecutive_not_found:
         return
 
-    url = f"https://habr.com/kek/v2/articles/{pub_id}/"
+    url = f"{settings.HABR_BASE_API_URL.rstrip('/')}/{pub_id}/"
 
     async with semaphore:
         if state.stop_event.is_set() or state.consecutive_not_found >= state.max_consecutive_not_found:
@@ -336,7 +318,7 @@ async def fetch_habr_publication(
                             "Rate limited (HTTP %d) on pub_id=%d [proxy=%s]. Backing off...",
                             response.status_code,
                             pub_id,
-                            sanitize_proxy_url(HABR_PROXY),
+                            sanitize_proxy_url(settings.PROXY_SERVER_STR),
                         )
                         raise RateLimitException(f"HTTP {response.status_code}")
 
@@ -498,7 +480,7 @@ async def fetch_habr_publication(
                 logger.warning(
                     "HTTP 403 (Security Ban) for pub_id=%d [proxy=%s]",
                     pub_id,
-                    sanitize_proxy_url(HABR_PROXY),
+                    sanitize_proxy_url(settings.PROXY_SERVER_STR),
                 )
                 state.register_fatal_error(f"HTTP 403 (Security Ban) for pub_id={pub_id}")
                 record = {
@@ -532,9 +514,9 @@ async def fetch_habr_publication(
             await queue.put(record)
 
 
-async def run_scraper(
-    start_id: int = 560000,
-    end_id: int = 560500,
+async def scraper(
+    start_id: int,
+    end_id: int,
     batch_size: int = 100,
     concurrency: int = 15,
     output_file: str = DEFAULT_OUTPUT,
@@ -549,7 +531,7 @@ async def run_scraper(
 
     writer_task = asyncio.create_task(file_writer(result_queue, output_file))
 
-    active_proxy = HABR_PROXY or None
+    active_proxy = settings.PROXY_SERVER_STR
     logger.info(
         "Starting scraper execution: range=(%d, %d), batch_size=%d, concurrency=%d, proxy=%s",
         start_id,
@@ -627,8 +609,12 @@ async def run_scraper(
     return state
 
 
+# Alias for backward compatibility
+run_scraper = scraper
+
+
 if __name__ == "__main__":
-    log_file = Path(__file__).resolve().parent.parent / "data" / "scraper.log"
+    log_file = Path(get_data_path(SCRAPER_LOG_FILE))
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
@@ -642,23 +628,12 @@ if __name__ == "__main__":
 
     init_ray()
 
-    required_vars = ["START_ID", "END_ID", "BATCH_SIZE", "CONCURRENCY"]
-    missing_vars = [var for var in required_vars if var not in os.environ]
-    if missing_vars:
-        raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
-
-    start_id = int(os.environ["START_ID"])
-    end_id = int(os.environ["END_ID"])
-    batch_size = int(os.environ["BATCH_SIZE"])
-    concurrency = int(os.environ["CONCURRENCY"])
-    output_file = DEFAULT_OUTPUT
-
     asyncio.run(
-        run_scraper(
-            start_id=start_id,
-            end_id=end_id,
-            batch_size=batch_size,
-            concurrency=concurrency,
-            output_file=output_file,
+        scraper(
+            start_id=settings.START_ID,
+            end_id=settings.END_ID,
+            batch_size=settings.BATCH_SIZE,
+            concurrency=settings.CONCURRENCY,
+            output_file=settings.OUTPUT_FILE or get_data_path(RAW_SCRAPES_FILE),
         )
     )

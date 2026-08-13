@@ -19,5 +19,6 @@ RUN mkdir -p /app/feed/data
 # Volume target for persistent jsonl logs inside container
 VOLUME ["/app/feed/data"]
 
-# Run scraper as default entrypoint
-ENTRYPOINT ["python", "-m", "feed.services.scraper"]
+# CLI entrypoint for orchestrating scraper & analytics
+ENTRYPOINT ["python", "-m", "feed"]
+CMD ["run-scraper"]
