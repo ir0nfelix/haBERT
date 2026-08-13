@@ -37,6 +37,9 @@ htmlcov/
 
 # Data Files & Scraper Output
 feed/data/*.jsonl
+feed/data/*.csv
+*.log
+feed/data/*.log
 !feed/data/.gitkeep
 
 # IDEs & Editors

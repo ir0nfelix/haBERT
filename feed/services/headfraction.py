@@ -147,18 +147,3 @@ def headfraction(input_file: str) -> None:
             FORCE_QUOTE (hub_name, tag_name) 
         );
     """)
-
-
-# Aliases for backward compatibility
-run_onion_analytics = headfraction
-execute_headfraction = headfraction
-
-
-if __name__ == "__main__":
-    input_path = (
-        sys.argv[1]
-        if len(sys.argv) > 1
-        else (settings.SCRAPER_OUTPUT_FILE or get_data_path(RAW_SCRAPES_FILE))
-    )
-    headfraction(input_path)
-

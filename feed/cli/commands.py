@@ -3,8 +3,8 @@ import asyncio
 import typer
 
 from feed.ray import init_ray
-from feed.services.headfraction import execute_headfraction
-from feed.services.scraper import scraper as execute_scraper
+from feed.services.headfraction import headfraction
+from feed.services.scraper import scraper
 from feed.settings import settings
 
 app = typer.Typer(help="haBERT CLI - Scraper & Analytics Pipeline Manager")
@@ -32,7 +32,7 @@ def run_scraper(
         init_ray()
 
     asyncio.run(
-        execute_scraper(
+        scraper(
             start_id=s_id,
             end_id=e_id,
             batch_size=b_size,
@@ -53,7 +53,7 @@ def run_headfraction(
 ) -> None:
     target_path = input_file if input_file is not None else settings.SCRAPER_OUTPUT_FILE
     typer.secho(f">>> ЗАПУСК ПЕРВАЧА: Обработка файла {target_path}", fg=typer.colors.CYAN)
-    execute_headfraction(target_path)
+    headfraction(target_path)
     typer.secho("Аналитика завершена!", fg=typer.colors.GREEN)
 
 
@@ -79,7 +79,7 @@ def run_all_steps(
         init_ray()
 
     asyncio.run(
-        execute_scraper(
+        scraper(
             start_id=s_id,
             end_id=e_id,
             batch_size=b_size,
@@ -90,10 +90,5 @@ def run_all_steps(
     )
 
     typer.secho("--- ЭТАП 2: ТРАНСФОРМАЦИЯ И ОЧИСТКА (ПЕРВАЧ) ---", fg=typer.colors.BLUE)
-    execute_headfraction(out_file)
+    headfraction(out_file)
     typer.secho("=== ПОЛНЫЙ ПАЙПЛАЙН УСПЕШНО ЗАВЕРШЕН ===", fg=typer.colors.MAGENTA, bold=True)
-
-
-if __name__ == "__main__":
-    app()
-

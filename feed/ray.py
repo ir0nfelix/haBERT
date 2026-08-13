@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 
 from feed.helpers import get_random_headers
-from feed.settings import settings
+from feed.settings import HABR_BASE_API_URL, settings
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ if RAY_AVAILABLE:
             proxy = settings.PROXY_SERVER_STR
             async with httpx.AsyncClient(timeout=8.0, limits=limits, trust_env=False, proxy=proxy) as client:
                 for pub_id in range(gap_start, gap_stop):
-                    url = f"{settings.HABR_BASE_API_URL.rstrip('/')}/{pub_id}/"
+                    url = f"{HABR_BASE_API_URL.rstrip('/')}/{pub_id}/"
                     try:
                         resp = await client.head(url=url, headers=get_random_headers())
                         if resp.status_code in (200, 403):

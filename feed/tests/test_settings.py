@@ -2,6 +2,7 @@ from pathlib import Path
 from feed.helpers import get_data_path
 from feed.settings import (
     DEFAULT_OUTPUT_BASE_DIR,
+    HABR_BASE_API_URL,
     HEADFRACTION_HTTP_STATUSES_FILE,
     HEADFRACTION_HUBS_FREQUENCY_FILE,
     HEADFRACTION_POST_TYPES_FILE,
@@ -16,7 +17,7 @@ from feed.settings import (
 
 def test_settings_default_values() -> None:
     """Test that Settings loads default values correctly."""
-    assert settings.HABR_BASE_API_URL == "https://habr.com/kek/v2/articles/"
+    assert HABR_BASE_API_URL == "https://habr.com/kek/v2/articles/"
     assert settings.START_ID == 100
     assert settings.END_ID == 200
     assert settings.BATCH_SIZE == 500

@@ -1,10 +1,7 @@
 from pathlib import Path
 from typing import Optional
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-from feed.helpers import get_data_path
 
 DEFAULT_OUTPUT_BASE_DIR = str(Path(__file__).resolve().parent / "data")
 
@@ -58,7 +55,7 @@ class Settings(BaseSettings):
     END_ID: int = 200
     BATCH_SIZE: int = 500
     CONCURRENCY: int = 15
-    SCRAPER_OUTPUT_FILE: str = Field(default_factory=lambda: get_data_path(RAW_SCRAPES_FILE))
+    SCRAPER_OUTPUT_FILE: Optional[str] = None
     USE_RAY: bool = True
     RAY_ADDRESS: str = "ray://127.0.0.1:10001"
 

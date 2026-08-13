@@ -12,7 +12,7 @@ import stamina
 from feed.helpers import get_data_path, get_random_headers, sanitize_proxy_url
 from feed.ray import init_ray, is_ray_initialized, ray, ray_gap_sweeper
 from feed.schemas.habr_models import HabrPublicationDTO
-from feed.settings import RAW_SCRAPES_FILE, SCRAPER_LOG_FILE, settings
+from feed.settings import HABR_BASE_API_URL, RAW_SCRAPES_FILE, SCRAPER_LOG_FILE, settings
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ async def fallback_gap_sweeper(gap_start: int, gap_stop: int) -> list[int]:
     )
     async with httpx.AsyncClient(timeout=8.0, limits=limits, trust_env=False, proxy=proxy) as client:
         for pub_id in range(gap_start, gap_stop):
-            url = f"{settings.HABR_BASE_API_URL.rstrip('/')}/{pub_id}/"
+            url = f"{HABR_BASE_API_URL.rstrip('/')}/{pub_id}/"
             try:
                 resp = await client.head(url=url, headers=get_random_headers())
                 if resp.status_code in (200, 403):
@@ -163,7 +163,7 @@ async def probe_gap_right_edge(
         # Check local window of up to 30 IDs around probe_target
         local_hit = None
         for test_id in range(probe_target, probe_target + 30):
-            url = f"{settings.HABR_BASE_API_URL.rstrip('/')}/{test_id}/"
+            url = f"{HABR_BASE_API_URL.rstrip('/')}/{test_id}/"
             try:
                 resp = await client.head(url=url, headers=get_random_headers())
                 if resp.status_code in (200, 403):
@@ -190,7 +190,7 @@ async def fetch_habr_publication(
     if state.stop_event.is_set() or state.consecutive_not_found >= state.max_consecutive_not_found:
         return
 
-    url = f"{settings.HABR_BASE_API_URL.rstrip('/')}/{pub_id}/"
+    url = f"{HABR_BASE_API_URL.rstrip('/')}/{pub_id}/"
 
     async with semaphore:
         if state.stop_event.is_set() or state.consecutive_not_found >= state.max_consecutive_not_found:
@@ -502,34 +502,3 @@ async def scraper(
     await writer_task
 
     return state
-
-
-# Alias for backward compatibility
-run_scraper = scraper
-
-
-if __name__ == "__main__":
-    log_file = Path(get_data_path(SCRAPER_LOG_FILE))
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
-            logging.StreamHandler(),
-        ],
-    )
-
-    if settings.USE_RAY:
-        init_ray()
-
-    asyncio.run(
-        scraper(
-            start_id=settings.START_ID,
-            end_id=settings.END_ID,
-            batch_size=settings.BATCH_SIZE,
-            concurrency=settings.CONCURRENCY,
-            output_file=settings.SCRAPER_OUTPUT_FILE or get_data_path(RAW_SCRAPES_FILE),
-        )
-    )

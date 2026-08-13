@@ -1,9 +1,25 @@
+import logging
 import random
 from pathlib import Path
 from typing import Union
 from urllib.parse import urlparse
 
-from feed.settings import BROWSER_PROFILES, DEFAULT_OUTPUT_BASE_DIR
+from feed.settings import BROWSER_PROFILES, DEFAULT_OUTPUT_BASE_DIR, SCRAPER_LOG_FILE
+
+
+def setup_logging() -> None:
+    """Configures global logging for the feed application."""
+    log_file = Path(get_data_path(SCRAPER_LOG_FILE))
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(log_file, encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
+    )
 
 
 def get_data_path(filename: str, base_dir: Union[str, Path, None] = None) -> str:

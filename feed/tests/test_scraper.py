@@ -10,7 +10,7 @@ from feed.services.scraper import (
     ScraperState,
     fetch_habr_publication,
     file_writer,
-    run_scraper,
+    scraper,
 )
 
 
