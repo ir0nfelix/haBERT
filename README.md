@@ -123,4 +123,100 @@ stateDiagram
 5. **Phase 5: Watcher Bridge (Возврат рабочих ID в основную очередь)**
    - Фоновый наблюдатель `gap_watcher` асинхронно дожидается результатов от Ray через `await asyncio.to_thread(ray.get, ...)`, не блокируя Event Loop.
    - Получив массив `alive_ids`, наблюдатель напрямую запускает стандартные задачи скачивания (`fetch_habr_publication`) для каждого спасенного ID.
-   - Эти статьи скачиваются параллельно с основным потоком полноценными `GET`-запросами и сохраняются в общий `habr_analytics.jsonl`.
+   - Эти статьи скачиваются параллельно с основным потоком полноценными `GET`-запросами и сохраняются в общий `raw_scraper.jsonl`.
+
+---
+
+## 6. Способы запуска приложения
+
+Приложение поддерживает запуск как в изолированном Docker-контейнере, так и локально через CLI-интерфейс Python-модуля `feed`.
+
+### 6.1. Запуск через Docker
+
+Контейнер использует единую точку входа на базе Python-модуля (`ENTRYPOINT ["python", "-m", "feed"]`). По умолчанию в `CMD` зашит вызов полного пайплайна (`run-all-steps`), включающий последовательный запуск скрапера и аналитики.
+
+#### Запуск с параметрами по умолчанию (полный пайплайн):
+```bash
+docker compose up -d
+```
+Или сборка и запуск через Docker CLI (с пробросом тома для сохранения данных):
+```bash
+docker build -t habert .
+docker run --rm -v $(pwd)/feed/data:/app/feed/data habert
+```
+
+#### Запуск конкретной CLI-команды с параметрами через Docker:
+```bash
+docker run --rm -v $(pwd)/feed/data:/app/feed/data habert run-scraper --start-id 560000 --end-id 560500 --concurrency 20
+```
+
+---
+
+### 6.2. Локальный запуск через CLI (`python -m feed`)
+
+Единая точка входа приложения при локальном запуске — Python-модуль `feed`. Вызовите справку для просмотра всех доступных команд:
+```bash
+python -m feed --help
+```
+
+#### Доступные CLI-команды:
+
+##### 1. Полный пайплайн (`run-all-steps`)
+Запускает асинхронный скрапер, после чего автоматически передает собранные данные в модуль очистки и аналитики (Первач):
+```bash
+python -m feed run-all-steps [OPTIONS]
+```
+
+##### 2. Запуск только скрапера (`run-scraper`)
+Запускает исключительно асинхронный сборщик публикаций Habr API:
+```bash
+python -m feed run-scraper [OPTIONS]
+```
+
+**Доступные опции для `run-scraper` и `run-all-steps`:**
+
+| Опция CLI | Тип | Описание | Значение по умолчанию |
+| :--- | :--- | :--- | :--- |
+| `--start-id` | `INTEGER` | Начальный `pub_id` для парсинга | Из `.env` (`START_ID=100`) |
+| `--end-id` | `INTEGER` | Конечный `pub_id` для парсинга | Из `.env` (`END_ID=200`) |
+| `--batch-size` | `INTEGER` | Размер пачки публикаций за итерацию | Из `.env` (`BATCH_SIZE=500`) |
+| `--concurrency` | `INTEGER` | Лимит одновременных асинхронных запросов | Из `.env` (`CONCURRENCY=15`) |
+| `--output-file` | `PATH` | Путь к итоговому JSONL-файлу результатов | Из `.env` (`SCRAPER_OUTPUT_FILE` или `feed/data/raw_scraper.jsonl`) |
+| `--use-ray / --no-use-ray` | `BOOLEAN` | Флаг использования кластера Ray для разведки каверн | Из `.env` (`USE_RAY=True`) |
+| `--help` | | Показать справку по параметрам команды | |
+
+**Примеры использования CLI:**
+```bash
+# Запуск с параметрами из .env
+python -m feed run-scraper
+
+# Запуск парсинга конкретного диапазона с высокой параллельностью
+python -m feed run-scraper --start-id 560000 --end-id 561000 --concurrency 25
+
+# Запуск полного пайплайна с отключенным Ray (использование локального fallback-воркера)
+python -m feed run-all-steps --no-use-ray
+```
+
+##### 3. Запуск аналитики («Первач») (`run-headfraction`)
+Запускает трансформацию, фильтрацию и построение агрегатов из сырого JSONL-файла:
+```bash
+python -m feed run-headfraction [INPUT_FILE]
+```
+- `INPUT_FILE` *(опционально)*: Путь к файлу с сырыми данными скрапера. Если не указан, берется значение из переменной окружения `SCRAPER_OUTPUT_FILE` или дефолтный путь `feed/data/raw_scraper.jsonl`.
+
+---
+
+### 6.3. Переменные окружения (`.env`)
+
+Все параметры по умолчанию могут быть настроены через файл `.env` в корне проекта (см. `.env.example`):
+
+```ini
+START_ID=100
+END_ID=200
+BATCH_SIZE=500
+CONCURRENCY=15
+PROXY_SERVER_STR=http://user:pass@127.0.0.1:8080
+SCRAPER_OUTPUT_FILE=feed/data/raw_scraper.jsonl
+USE_RAY=True
+RAY_ADDRESS=ray://127.0.0.1:10001
+```
