@@ -1,5 +1,6 @@
 import os
 import sys
+
 import duckdb
 
 from feed.helpers import get_data_path
@@ -16,15 +17,11 @@ from feed.settings import (
 
 
 def headfraction(input_file: str) -> None:
-    """Executes DuckDB analytical queries on habr_analytics.jsonl to produce summary CSV files in feed/data."""
     if not os.path.exists(input_file):
         print(f"Ошибка: Файл {input_file} не найден.")
         return
 
     output_dir = os.path.dirname(os.path.abspath(input_file))
-    conn = duckdb.connect(":memory:")
-
-    # Output file paths
     http_statuses_path = get_data_path(HEADFRACTION_HTTP_STATUSES_FILE, output_dir)
     seo_flags_path = get_data_path(HEADFRACTION_SEO_FLAGS_FILE, output_dir)
     post_types_path = get_data_path(HEADFRACTION_POST_TYPES_FILE, output_dir)
@@ -32,6 +29,7 @@ def headfraction(input_file: str) -> None:
     tags_freq_path = get_data_path(HEADFRACTION_TAGS_FREQUENCY_FILE, output_dir)
     tag_edges_path = get_data_path(HEADFRACTION_TAG_EDGES_FILE, output_dir)
 
+    conn = duckdb.connect(":memory:")
     # ==========================================
     # ВЫБОРКА 1: ГЛОБАЛЬНАЯ ДЕДУПЛИКАЦИЯ
     # ==========================================
@@ -160,7 +158,7 @@ if __name__ == "__main__":
     input_path = (
         sys.argv[1]
         if len(sys.argv) > 1
-        else (settings.OUTPUT_FILE or get_data_path(RAW_SCRAPES_FILE))
+        else (settings.SCRAPER_OUTPUT_FILE or get_data_path(RAW_SCRAPES_FILE))
     )
     headfraction(input_path)
 

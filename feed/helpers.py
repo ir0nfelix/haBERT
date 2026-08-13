@@ -1,8 +1,9 @@
+import random
 from pathlib import Path
 from typing import Union
 from urllib.parse import urlparse
 
-from feed.settings import DEFAULT_OUTPUT_BASE_DIR
+from feed.settings import BROWSER_PROFILES, DEFAULT_OUTPUT_BASE_DIR
 
 
 def get_data_path(filename: str, base_dir: Union[str, Path, None] = None) -> str:
@@ -23,3 +24,22 @@ def sanitize_proxy_url(proxy: str | None) -> str:
     except Exception:
         pass
     return "Enabled"
+
+
+def get_random_headers() -> dict[str, str]:
+    profile = random.choice(BROWSER_PROFILES)
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Priority": "u=1, i",
+        "Cache-Control": "max-age=0",
+        "Referer": "https://habr.com/",
+        "Origin": "https://habr.com/",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "Connection": "keep-alive",
+    }
+    headers.update(profile)
+    return headers

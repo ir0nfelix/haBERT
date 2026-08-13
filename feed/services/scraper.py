@@ -2,16 +2,15 @@ import asyncio
 import json
 import logging
 import os
-from pathlib import Path
-import random
-from typing import Any
 from datetime import datetime, timezone
+from pathlib import Path
 
 import aiofiles
 import httpx
 import stamina
 
-from feed.helpers import get_data_path, sanitize_proxy_url
+from feed.helpers import get_data_path, get_random_headers, sanitize_proxy_url
+from feed.ray import init_ray, is_ray_initialized, ray, ray_gap_sweeper
 from feed.schemas.habr_models import HabrPublicationDTO
 from feed.settings import RAW_SCRAPES_FILE, SCRAPER_LOG_FILE, settings
 
@@ -19,32 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_OUTPUT = get_data_path(RAW_SCRAPES_FILE)
-
-# Ray integration setup
-try:
-    import ray
-    RAY_AVAILABLE = True
-except ImportError:
-    ray = None
-    RAY_AVAILABLE = False
-
-
-def init_ray(address: str = "ray://127.0.0.1:10001") -> bool:
-    """Initialize connection to Ray cluster with graceful fallback."""
-    if not RAY_AVAILABLE:
-        logger.warning("Ray package is not installed. Scraper will use local fallback for gap sweeps.")
-        return False
-    try:
-        ray.init(address=address, ignore_reinit_error=True)
-        logger.info("Successfully initialized Ray connection to %s", address)
-        return True
-    except Exception as exc:
-        logger.warning(
-            "Could not connect to Ray cluster at %s: %s. Continuing with local gap sweeper fallback.",
-            address,
-            exc,
-        )
-        return False
 
 
 class RateLimitException(Exception):
@@ -54,8 +27,6 @@ class RateLimitException(Exception):
 
 
 class ScraperState:
-    """Tracks error thresholds, consecutive 404s, known gap ranges, and controls emergency stop."""
-
     def __init__(self, max_fatal_errors: int = 25, max_consecutive_not_found: int = 100) -> None:
         self.fatal_errors_count: int = 0
         self.consecutive_not_found: int = 0
@@ -109,82 +80,6 @@ async def file_writer(queue: asyncio.Queue, file_path: str) -> None:
             queue.task_done()
 
 
-def get_random_headers() -> dict[str, str]:
-    """Генерирует случайный, максимально реалистичный профиль браузера для обхода WAF."""
-    browser_profiles = [
-        {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"Windows"',
-        },
-        {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"macOS"',
-        },
-        {
-            "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            "Sec-Ch-Ua-Mobile": "?1",
-            "Sec-Ch-Ua-Platform": '"Android"',
-        },
-        {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"Windows"',
-        },
-    ]
-
-    profile = random.choice(browser_profiles)
-    headers = {
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Encoding": "gzip, deflate, br, zstd",
-        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Priority": "u=1, i",
-        "Cache-Control": "max-age=0",
-        "Referer": "https://habr.com/",
-        "Origin": "https://habr.com/",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
-        "Connection": "keep-alive",
-    }
-    headers.update(profile)
-    return headers
-
-
-# Phase 4: Ray Worker Logic
-if RAY_AVAILABLE:
-
-    @ray.remote
-    def ray_gap_sweeper(gap_start: int, gap_stop: int) -> list[int]:
-        """Ray remote task executing asynchronous HEAD/GET checks over a missing gap range."""
-
-        async def _sweep() -> list[int]:
-            alive: list[int] = []
-            limits = httpx.Limits(max_keepalive_connections=10, max_connections=25)
-            proxy = settings.PROXY_SERVER_STR
-            async with httpx.AsyncClient(timeout=8.0, limits=limits, trust_env=False, proxy=proxy) as client:
-                for pub_id in range(gap_start, gap_stop):
-                    url = f"{settings.HABR_BASE_API_URL.rstrip('/')}/{pub_id}/"
-                    try:
-                        resp = await client.head(url=url, headers=get_random_headers())
-                        if resp.status_code in (200, 403):
-                            alive.append(pub_id)
-                    except Exception:
-                        pass
-            return alive
-
-        return asyncio.run(_sweep())
-
-else:
-
-    def ray_gap_sweeper(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
-        raise NotImplementedError("Ray package is not installed.")
-
-
 async def fallback_gap_sweeper(gap_start: int, gap_stop: int) -> list[int]:
     """In-process async fallback sweeper when Ray is not connected."""
     alive: list[int] = []
@@ -222,7 +117,7 @@ async def gap_watcher(
     logger.info("Gap watcher launched for range (%d, %d).", gap_start, gap_stop)
     alive_ids: list[int] = []
 
-    if use_ray and RAY_AVAILABLE and ray.is_initialized():
+    if use_ray and is_ray_initialized():
         try:
             ray_future = ray_gap_sweeper.remote(gap_start, gap_stop)
             alive_ids = await asyncio.to_thread(ray.get, ray_future)
@@ -626,7 +521,8 @@ if __name__ == "__main__":
         ],
     )
 
-    init_ray()
+    if settings.USE_RAY:
+        init_ray()
 
     asyncio.run(
         scraper(
@@ -634,6 +530,6 @@ if __name__ == "__main__":
             end_id=settings.END_ID,
             batch_size=settings.BATCH_SIZE,
             concurrency=settings.CONCURRENCY,
-            output_file=settings.OUTPUT_FILE or get_data_path(RAW_SCRAPES_FILE),
+            output_file=settings.SCRAPER_OUTPUT_FILE or get_data_path(RAW_SCRAPES_FILE),
         )
     )

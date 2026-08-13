@@ -60,3 +60,15 @@ def test_sanitize_proxy_url() -> None:
         == "http://user@127.0.0.1:8080"
     )
     assert sanitize_proxy_url("http://127.0.0.1:8080") == "http://127.0.0.1:8080"
+
+
+def test_get_random_headers() -> None:
+    """Test get_random_headers helper returns expected header structure."""
+    from feed.helpers import get_random_headers
+    from feed.settings import BROWSER_PROFILES
+
+    assert len(BROWSER_PROFILES) >= 4
+    headers = get_random_headers()
+    assert "User-Agent" in headers
+    assert "Accept" in headers
+    assert headers["Referer"] == "https://habr.com/"
